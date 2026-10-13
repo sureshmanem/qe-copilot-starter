@@ -1,0 +1,24 @@
+{
+  // Approved MCP servers only. Pin each package to the version published in your
+  // internal Azure Artifacts feed (replace @latest with e.g. @1.2.3).
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "ado_org",
+      "description": "Azure DevOps organization name (the part after dev.azure.com/)"
+    }
+  ],
+  "servers": {
+    "playwright": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    },
+    "azure-devops": {
+      // Signs in with your Microsoft Entra account in the browser on first use.
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@azure-devops/mcp@latest", "${input:ado_org}"]
+    }
+  }
+}

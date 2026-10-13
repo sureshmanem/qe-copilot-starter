@@ -1,0 +1,126 @@
+# Playwright QE pipeline for Azure Pipelines.
+# PR validation: add this pipeline as a Build Validation branch policy on main
+# (YAML `pr:` triggers are ignored for Azure Repos). PR runs execute @smoke; the nightly schedule runs everything.
+
+trigger:
+  branches:
+    include: [main]
+
+schedules:
+  - cron: '0 2 * * 1-5'
+    displayName: Nightly full regression
+    branches:
+      include: [main]
+    always: true
+
+variables:
+  # Variable group linked to Azure Key Vault: BASE_URL, API_BASE_URL, API_TOKEN, TEST_USER, TEST_PASSWORD,
+  # and optionally PLAYWRIGHT_DOWNLOAD_HOST for an internal browser mirror.
+  - group: qe-automation
+  - ${{ if eq(variables['Build.Reason'], 'Schedule') }}:
+      - name: testFilter
+        value: ''
+  - ${{ else }}:
+      - name: testFilter
+        value: '--grep @smoke'
+
+pool:
+  vmImage: ubuntu-latest # or your self-hosted agent pool
+
+stages:
+  - stage: Validate
+    jobs:
+      - job: static_checks
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '20.x'
+          - task: npmAuthenticate@0
+            inputs:
+              workingFile: .npmrc
+          - script: npm ci
+            displayName: Install dependencies
+          - script: npm run lint
+            displayName: Lint
+          - script: npm run typecheck
+            displayName: Typecheck
+
+  - stage: Test
+    dependsOn: Validate
+    jobs:
+      - job: playwright
+        strategy:
+          parallel: 4 # shards
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '20.x'
+          - task: npmAuthenticate@0
+            inputs:
+              workingFile: .npmrc
+          - script: npm ci
+            displayName: Install dependencies
+          - script: npx playwright install --with-deps chromium
+            displayName: Install browsers
+            env:
+              PLAYWRIGHT_DOWNLOAD_HOST: $(PLAYWRIGHT_DOWNLOAD_HOST)
+          - script: npx playwright test $(testFilter) --shard=$(System.JobPositionInPhase)/$(System.TotalJobsInPhase)
+            displayName: Run Playwright tests
+            env:
+              CI: 'true'
+              BASE_URL: $(BASE_URL)
+              API_BASE_URL: $(API_BASE_URL)
+              API_TOKEN: $(API_TOKEN)
+              TEST_USER: $(TEST_USER)
+              TEST_PASSWORD: $(TEST_PASSWORD)
+          - script: |
+              mkdir -p api-calls
+              cp test-results/api-calls.jsonl api-calls/ 2>/dev/null || touch api-calls/api-calls.jsonl
+            displayName: Collect API calls for coverage
+            condition: succeededOrFailed()
+          - task: PublishTestResults@2
+            displayName: Publish test results
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: test-results/junit.xml
+              testRunTitle: Playwright shard $(System.JobPositionInPhase)
+          - task: PublishPipelineArtifact@1
+            displayName: Publish HTML report and traces
+            condition: succeededOrFailed()
+            inputs:
+              targetPath: playwright-report
+              artifact: playwright-report-$(System.JobPositionInPhase)
+          - task: PublishPipelineArtifact@1
+            condition: succeededOrFailed()
+            inputs:
+              targetPath: api-calls
+              artifact: api-calls-$(System.JobPositionInPhase)
+
+      - job: api_coverage
+        dependsOn: playwright
+        condition: succeededOrFailed()
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '20.x'
+          - task: npmAuthenticate@0
+            inputs:
+              workingFile: .npmrc
+          - script: npm ci
+            displayName: Install dependencies
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              itemPattern: 'api-calls-*/**'
+              targetPath: $(Pipeline.Workspace)/api-calls
+          - script: |
+              mkdir -p test-results
+              cat $(Pipeline.Workspace)/api-calls/*/api-calls.jsonl > test-results/api-calls.jsonl
+              npm run coverage:api -- --spec api-specs/openapi.yaml
+            displayName: API endpoint coverage
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: test-results/api-coverage.json
+              artifact: api-coverage
+          # Application code coverage: when the app under test is built with Istanbul instrumentation,
+          # publish its Cobertura report here with PublishCodeCoverageResults@2.

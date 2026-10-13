@@ -1,0 +1,20 @@
+{
+  // Copilot customization files
+  "github.copilot.chat.codeGeneration.useInstructionFiles": true,
+  "chat.promptFiles": true,
+  "chat.useAgentsMdFile": true,
+
+  // Agents may run only these commands without asking. Everything else needs confirmation.
+  "chat.tools.terminal.autoApprove": {
+    "npx playwright test": true,
+    "npm run typecheck": true,
+    "npm run lint": true,
+    "npm run test": true,
+    "rm": false,
+    "git push": false,
+    "curl": false
+  },
+
+  "editor.formatOnSave": true,
+  "typescript.preferences.importModuleSpecifier": "relative"
+}
